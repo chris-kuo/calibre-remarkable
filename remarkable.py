@@ -280,7 +280,7 @@ def find_existing_document(title, folder_uuid=''):
     return None
 
 
-def update_existing_document(pdf_path, doc_uuid):
+def update_existing_document(pdf_path, doc_uuid, open_at_end=False):
     """
     Update an existing document's PDF file only.
     Preserves metadata, annotations, and reading position.
@@ -288,6 +288,9 @@ def update_existing_document(pdf_path, doc_uuid):
     Args:
         pdf_path: Path to new PDF file
         doc_uuid: UUID of existing document
+        open_at_end: True for a right-to-left book, which opens on its last
+            page. An already-read document keeps the position it is on; only an
+            unread one is moved to the end.
 
     Returns:
         tuple: (success, message)
@@ -336,6 +339,10 @@ def update_existing_document(pdf_path, doc_uuid):
                 metadata = json.load(f)
 
             metadata['lastModified'] = str(int(time.time() * 1000))
+            if open_at_end and not metadata.get('lastOpenedPage'):
+                # Unread so far: start at the far end, which is where a
+                # right-to-left book begins.
+                metadata['lastOpenedPage'] = max(0, new_page_count - 1)
 
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=4)
@@ -352,9 +359,18 @@ def update_existing_document(pdf_path, doc_uuid):
         return (False, f"Error updating document: {str(e)}")
 
 
-def send_to_remarkable(pdf_path, title, folder_uuid='', author=None):
+def send_to_remarkable(pdf_path, title, folder_uuid='', author=None, open_at_end=False):
     """
     Send PDF to reMarkable desktop app
+
+    Args:
+        pdf_path: Path to the PDF to send
+        title: Document title
+        folder_uuid: Target folder UUID ('' for the root)
+        author: Author name for the document metadata
+        open_at_end: True for a right-to-left book. Its pages are reversed, so
+            it opens on the last page; the cover image sits at both ends of the
+            PDF, so page 1 still thumbnails correctly.
 
     Returns:
         tuple: (success, uuid, message)
@@ -376,6 +392,11 @@ def send_to_remarkable(pdf_path, title, folder_uuid='', author=None):
     doc_uuid = str(uuid_module.uuid4())
     page_uuids = [str(uuid_module.uuid4()) for _ in range(page_count)]
     
+    # A right-to-left book runs back to front, so it opens on the final page of
+    # the file rather than the first. The library cover stays page 1: for an RTL
+    # book the plugin puts a copy of the cover image at both ends of the PDF.
+    start_page = max(0, page_count - 1) if open_at_end else 0
+
     try:
         # 1. Copy PDF
         shutil.copy(pdf_path, rm_path / f"{doc_uuid}.pdf")
@@ -386,7 +407,7 @@ def send_to_remarkable(pdf_path, title, folder_uuid='', author=None):
             "createdTime": timestamp_ms,
             "lastModified": timestamp_ms,
             "lastOpened": timestamp_ms,
-            "lastOpenedPage": 0,
+            "lastOpenedPage": start_page,
             "new": True,
             "parent": folder_uuid,
             "pinned": False,

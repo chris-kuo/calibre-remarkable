@@ -15,6 +15,7 @@ prefs.defaults['default_folder_uuid'] = ''
 prefs.defaults['default_folder_name'] = 'Root'
 prefs.defaults['device_type'] = 'rmpp'  # Default to Paper Pro
 prefs.defaults['auto_convert_epub'] = True
+prefs.defaults['pdf_page_direction'] = 'auto'  # 'auto' (from the EPUB's OPF), 'rtl', 'ltr'
 prefs.defaults['pdf_font_family'] = ''  # Empty means use default
 prefs.defaults['pdf_font_size'] = 24.0  # In pixels (matching manual conversion)
 prefs.defaults['pdf_line_height'] = 125  # percentage
@@ -32,6 +33,13 @@ prefs.defaults['col_rm_uuid'] = ''  # Column for reMarkable document UUID (requi
 prefs.defaults['col_progress'] = ''  # Column for reading progress (0-100%)
 prefs.defaults['col_page'] = ''  # Column for current page number
 prefs.defaults['col_last_read'] = ''  # Column for last read timestamp
+
+# Page flip direction options: (label, preference value)
+PAGE_DIRECTIONS = (
+    ('Auto (follow the EPUB page-progression-direction)', 'auto'),
+    ('Always right-to-left', 'rtl'),
+    ('Always left-to-right', 'ltr'),
+)
 
 # Font sizes in pixels (matching Calibre's PDF output settings)
 RMPP_FONT_SIZES = [9.0, 11.0, 12.0, 13.0, 14.0, 17.0, 19.0, 21.0, 22.0, 24.0, 28.0, 32.0]
@@ -100,6 +108,25 @@ class ConfigWidget(QWidget):
         self.auto_convert = QCheckBox('Auto-convert EPUB to PDF')
         self.auto_convert.setChecked(prefs['auto_convert_epub'])
         conversion_layout.addWidget(self.auto_convert)
+
+        direction_layout = QHBoxLayout()
+        direction_layout.addWidget(QLabel('Page flip direction:'))
+        self.page_direction = QComboBox()
+        for label, key in PAGE_DIRECTIONS:
+            self.page_direction.addItem(label, key)
+        index = self.page_direction.findData(prefs['pdf_page_direction'])
+        self.page_direction.setCurrentIndex(index if index >= 0 else 0)
+        direction_layout.addWidget(self.page_direction)
+        direction_layout.addStretch()
+        conversion_layout.addLayout(direction_layout)
+
+        direction_help = QLabel(
+            'Right-to-left books are flagged /Direction /R2L in the PDF and have their page '
+            'order reversed, since the reMarkable ignores the flag. Such a book opens on its '
+            'cover at the far end - tap the left side of the screen to move forward, as in a '
+            'printed manga or Arabic volume.')
+        direction_help.setWordWrap(True)
+        conversion_layout.addWidget(direction_help)
 
         font_family_layout = QHBoxLayout()
         font_family_layout.addWidget(QLabel('Font family:'))
@@ -278,6 +305,7 @@ class ConfigWidget(QWidget):
         prefs['default_folder_name'] = self.folder_combo.currentText()
         prefs['device_type'] = self.device_type.currentData()
         prefs['auto_convert_epub'] = self.auto_convert.isChecked()
+        prefs['pdf_page_direction'] = self.page_direction.currentData() or 'auto'
         font_text = self.font_family.currentText()
         if not font_text or font_text == '(System default)':
             prefs['pdf_font_family'] = ''

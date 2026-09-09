@@ -14,7 +14,7 @@ import tempfile
 
 def convert_epub_to_pdf(epub_path, title, device_type='rmpp', font_family='', font_size=12.0,
                         line_height=125, margin_left=15, margin_right=15, margin_top=45,
-                        margin_bottom=35, footer_template=''):
+                        margin_bottom=35, footer_template='', page_direction='auto'):
     """
     Convert EPUB to PDF using Calibre's Plumber.
 
@@ -33,9 +33,11 @@ def convert_epub_to_pdf(epub_path, title, device_type='rmpp', font_family='', fo
         margin_top: Top margin in points
         margin_bottom: Bottom margin in points
         footer_template: HTML template for page footer
+        page_direction: 'auto' to follow the EPUB's page-progression-direction,
+            'rtl' to always produce a right-to-left book, 'ltr' to never do so
 
     Returns:
-        dict with 'success', 'pdf_path', and 'error' keys
+        dict with 'success', 'pdf_path', 'error' and 'rtl' keys
     """
     from calibre.customize.conversion import OptionRecommendation
     from calibre.ebooks.conversion.plumber import Plumber
@@ -122,16 +124,70 @@ blockquote, .quote, .epigraph, .pullquote {{
         plumber.run()
 
         if os.path.exists(pdf_path):
-            # Post-process: add full-bleed cover
-            make_cover_fullbleed(epub_path, pdf_path, log)
-            return {'success': True, 'pdf_path': pdf_path, 'error': ''}
+            # Post-process: add the full-bleed cover, then apply right-to-left
+            # page progression. The cover must already be in place, because an
+            # RTL book's front cover belongs at the *end* of the reversed PDF -
+            # and a second copy goes at the other end so that page 1 is still
+            # the cover, which is what the reMarkable desktop app thumbnails.
+            wants_rtl = _wants_rtl(epub_path, page_direction)
+            make_cover_fullbleed(epub_path, pdf_path, log, duplicate_at_end=wants_rtl)
+            rtl, rtl_error = apply_page_direction(pdf_path, wants_rtl, log)
+            return {'success': True, 'pdf_path': pdf_path, 'error': '',
+                    'rtl': rtl, 'rtl_error': rtl_error}
         else:
-            return {'success': False, 'pdf_path': None,
+            return {'success': False, 'pdf_path': None, 'rtl': False, 'rtl_error': '',
                     'error': 'Conversion completed but output file not created'}
 
     except Exception as e:
         import traceback
-        return {'success': False, 'pdf_path': None, 'error': traceback.format_exc()}
+        return {'success': False, 'pdf_path': None, 'rtl': False, 'rtl_error': '',
+                'error': traceback.format_exc()}
+
+
+def _wants_rtl(epub_path, page_direction='auto'):
+    """
+    Whether this book should be produced as a right-to-left PDF.
+
+    Args:
+        epub_path: Source EPUB, whose OPF spine is consulted in 'auto' mode
+        page_direction: 'auto', 'rtl' or 'ltr'
+    """
+    from calibre_plugins.remarkable_sync.rtl import should_use_rtl
+
+    try:
+        return should_use_rtl(epub_path, page_direction)
+    except Exception:
+        return False
+
+
+def apply_page_direction(pdf_path, wants_rtl, log=None):
+    """
+    Give *pdf_path* right-to-left page flipping when the book calls for it.
+
+    Args:
+        pdf_path: PDF to modify in place
+        wants_rtl: Result of _wants_rtl() for this book
+        log: Calibre log to report a failure on
+
+    Returns:
+        tuple: (rtl_applied, error_message)
+    """
+    if not wants_rtl:
+        return (False, '')
+
+    if log is None:
+        from calibre.utils.logging import default_log as log
+
+    from calibre_plugins.remarkable_sync.rtl import make_pdf_rtl
+
+    try:
+        make_pdf_rtl(pdf_path, reverse_pages=True)
+        return (True, '')
+    except Exception as e:
+        # A book that cannot be flipped is still a perfectly good PDF, so the
+        # conversion is not failed over this - the reason is reported instead.
+        log('reMarkable Sync: could not apply right-to-left page order: %s' % e)
+        return (False, str(e))
 
 
 def _rasterize_svg_cover(svg_data, target_width):
@@ -181,13 +237,23 @@ def _looks_like_svg(name, data):
     return head.startswith(b'<?xml') and b'<svg' in data[:2048]
 
 
-def make_cover_fullbleed(epub_path, pdf_path, log=None):
+def make_cover_fullbleed(epub_path, pdf_path, log=None, duplicate_at_end=False):
     """
     Add a full-bleed cover image as the first page of the PDF.
 
     Extracts the cover from the EPUB, resizes it to fit the page dimensions
     (top-aligned with padding at bottom if needed), and inserts it
     as the first page of the PDF.
+
+    Args:
+        epub_path: Source EPUB to take the cover image from
+        pdf_path: PDF to modify in place
+        log: Calibre log
+        duplicate_at_end: Also append the cover as the last page. Used for
+            right-to-left books, whose pages are about to be reversed: the copy
+            added here at the front becomes the final page (where the book
+            opens), and the copy added at the end becomes page 1 (which is what
+            the reMarkable desktop app renders as the library thumbnail).
     """
     if log is None:
         from calibre.utils.logging import default_log as log
@@ -266,6 +332,16 @@ def make_cover_fullbleed(epub_path, pdf_path, log=None):
             1, False
         )
 
+        if duplicate_at_end:
+            # add_image_page() takes a 1-based position, so page_count() + 1
+            # appends past the current last page.
+            doc.add_image_page(
+                processed_cover_data,
+                0.0, 0.0, page_width, page_height,
+                0.0, 0.0, page_width, page_height,
+                doc.page_count() + 1, False
+            )
+
         # Save to temp file then replace (podofo can't overwrite open file)
         temp_pdf = pdf_path + '.tmp'
         doc.save(temp_pdf)
@@ -275,6 +351,15 @@ def make_cover_fullbleed(epub_path, pdf_path, log=None):
         # Keep the original PDF (without cover) but surface the cause
         import traceback
         log('reMarkable Sync: cover insertion failed:\n%s' % traceback.format_exc())
+
+
+def _rtl_note(data):
+    """Short suffix describing what happened to a book's page direction."""
+    if data.get('rtl'):
+        return ' (right-to-left page order)'
+    if data.get('rtl_error'):
+        return f' (right-to-left not applied: {data["rtl_error"]})'
+    return ''
 
 
 def check_existing_document(title, folder_uuid):
@@ -294,7 +379,7 @@ def check_existing_document(title, folder_uuid):
 
 def process_single_book(book, folder_uuid, device_type, font_family, font_size, line_height,
                         margin_left, margin_right, margin_top, margin_bottom,
-                        footer_template, auto_convert,
+                        footer_template, auto_convert, page_direction='auto',
                         update_existing=False, existing_uuid=None):
     """
     Process a single book: convert if needed and send to reMarkable.
@@ -315,6 +400,7 @@ def process_single_book(book, folder_uuid, device_type, font_family, font_size, 
         margin_bottom: Bottom margin in points
         footer_template: HTML template for page footer
         auto_convert: Whether to auto-convert EPUB to PDF
+        page_direction: 'auto', 'rtl' or 'ltr' page flip direction
         update_existing: If True, update existing document instead of creating new
         existing_uuid: UUID of existing document to update
 
@@ -331,6 +417,8 @@ def process_single_book(book, folder_uuid, device_type, font_family, font_size, 
 
     pdf_path = None
     temp_dir = None
+    rtl_note = ''
+    rtl = False
 
     try:
         if fmt == 'PDF':
@@ -345,7 +433,7 @@ def process_single_book(book, folder_uuid, device_type, font_family, font_size, 
                 'convert_epub_to_pdf',
                 args=(path, title, device_type, font_family, font_size, line_height,
                       margin_left, margin_right, margin_top, margin_bottom,
-                      footer_template),
+                      footer_template, page_direction),
                 timeout=600
             )
 
@@ -354,6 +442,8 @@ def process_single_book(book, folder_uuid, device_type, font_family, font_size, 
                 if data['success']:
                     pdf_path = data['pdf_path']
                     temp_dir = os.path.dirname(pdf_path)
+                    rtl_note = _rtl_note(data)
+                    rtl = bool(data.get('rtl'))
                 else:
                     return (False, f'{title}: Conversion failed - {data.get("error", "Unknown error")}', None)
             else:
@@ -361,17 +451,18 @@ def process_single_book(book, folder_uuid, device_type, font_family, font_size, 
 
         # Send to reMarkable (update or create new)
         if update_existing and existing_uuid:
-            success, message = update_existing_document(pdf_path, existing_uuid)
+            success, message = update_existing_document(pdf_path, existing_uuid,
+                                                        open_at_end=rtl)
             if success:
-                return (True, f"Updated '{title}'", existing_uuid)
+                return (True, f"Updated '{title}'{rtl_note}", existing_uuid)
             else:
                 return (False, f'{title}: {message}', None)
         else:
             success, doc_uuid, message = send_to_remarkable(
-                pdf_path, title, folder_uuid, author
+                pdf_path, title, folder_uuid, author, open_at_end=rtl
             )
             if success:
-                return (True, message, doc_uuid)
+                return (True, message + rtl_note, doc_uuid)
             else:
                 return (False, f'{title}: {message}', None)
 
@@ -413,7 +504,7 @@ def _unique_pdf_path(directory, base):
 
 def export_single_book(book, output_dir, device_type, font_family, font_size, line_height,
                        margin_left, margin_right, margin_top, margin_bottom,
-                       footer_template, auto_convert):
+                       footer_template, auto_convert, page_direction='auto'):
     """
     Export a single book as a reMarkable-tuned PDF into output_dir.
 
@@ -447,7 +538,7 @@ def export_single_book(book, output_dir, device_type, font_family, font_size, li
                 'convert_epub_to_pdf',
                 args=(path, title, device_type, font_family, font_size, line_height,
                       margin_left, margin_right, margin_top, margin_bottom,
-                      footer_template),
+                      footer_template, page_direction),
                 timeout=600
             )
 
@@ -460,7 +551,7 @@ def export_single_book(book, output_dir, device_type, font_family, font_size, li
             pdf_path = data['pdf_path']
             temp_dir = os.path.dirname(pdf_path)
             shutil.copy2(pdf_path, output_path)
-            return (True, f"Exported '{title}'", output_path)
+            return (True, f"Exported '{title}'{_rtl_note(data)}", output_path)
 
         return (False, f'{title}: Unsupported format {fmt}', None)
 

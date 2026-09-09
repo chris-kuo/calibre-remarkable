@@ -13,6 +13,7 @@ A Calibre plugin for synchronizing e-books with reMarkable tablets (Paper Pro Mo
 - Automatic EPUB to PDF conversion with configurable font, size, line height, and margins
 - Device-specific page sizes (reMarkable 2, Paper Pro, Paper Pro Move)
 - Full-bleed cover pages (no margins, optimized for e-ink display)
+- Right-to-left page flipping for manga and other books whose EPUB declares it
 - Select destination folder on reMarkable
 - Sync reading positions back to Calibre (progress, page, last read)
 - Document naming: "Series-Number Title - Author" for easy organization
@@ -87,6 +88,7 @@ remarkable-sync/
 ├── main.py          # Book path utilities
 ├── worker.py        # Conversion and sending logic (runs in background)
 ├── remarkable.py    # reMarkable file format handling
+├── rtl.py           # Right-to-left page progression (EPUB detection, PDF edit)
 ├── config.py        # Settings UI and preferences
 ├── images/          # Plugin icons
 └── Makefile         # Development commands
@@ -206,6 +208,18 @@ When sending EPUB files, the plugin converts them to PDF optimized for reMarkabl
 - **Typography**: Configurable font family, size, and line height
 - **Margins**: Configurable for comfortable reading
 - **Full-bleed cover**: The cover image is extracted and added as the first page without margins, scaled to fit the page width and top-aligned. Any padding at the bottom uses the dominant color from the cover's edge for a seamless appearance.
+- **Page flip direction**: EPUBs that declare `<spine page-progression-direction="rtl">` — manga, and Arabic or Hebrew books — are produced as right-to-left PDFs. Use the **Page flip direction** setting to follow the EPUB (default), or to force one direction for books whose OPF omits the attribute.
+
+### Right-to-left books
+
+The reMarkable has no right-to-left reading mode, so the plugin builds the PDF so that the device behaves as if it did:
+
+- The page order is **reversed**, so tapping the *left* side of the screen moves forward through the story, as in a printed manga volume.
+- The cover is placed at **both ends** of the file: the last page, where the book opens, and page 1, which is what the desktop app shows as the library thumbnail.
+- The document's `lastOpenedPage` is set to the last page, so the book opens on its cover rather than on the final page of the story.
+- The PDF is also flagged `/ViewerPreferences << /Direction /R2L >>` with an `/OpenAction` on the cover. The reMarkable ignores both, but desktop PDF readers honour them.
+
+Page numbers in the footer count down rather than up in a right-to-left book, and reading-position sync reports progress against the reversed page order.
 
 <p align="center">
   <img src="images/screenshots/device.jpg" alt="A converted book displayed on a reMarkable Paper Pro Move" width="600">
