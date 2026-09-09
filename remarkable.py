@@ -167,10 +167,39 @@ def get_all_folders():
 
 
 def get_pdf_page_count(pdf_path):
-    """Get the number of pages in a PDF file"""
+    """
+    Get the number of pages in a PDF file.
+
+    The first two methods read the PDF's page tree and are exact; everything
+    after them is a fallback that can be wrong. That matters: the count decides
+    lastOpenedPage for right-to-left books, and an out-of-range value is thrown
+    away by the reMarkable app, which then opens the book on page 1.
+    """
     import subprocess
 
-    # Method 1: Try pdfinfo (from poppler-utils)
+    # Method 1: calibre's own podofo. Always present inside calibre, and
+    # authoritative - it counts the page tree.
+    try:
+        from calibre.utils.podofo import get_podofo
+        doc = get_podofo().PDFDoc()
+        doc.open(pdf_path)
+        count = doc.page_count()
+        if count and count > 0:
+            return count
+    except Exception:
+        pass
+
+    # Method 2: read /Count off the page tree root ourselves. Pure Python, no
+    # dependencies, and correct even for a PDF carrying orphaned page objects.
+    try:
+        from calibre_plugins.remarkable_sync.rtl import count_pages
+        count = count_pages(pdf_path)
+        if count:
+            return count
+    except Exception:
+        pass
+
+    # Method 3: Try pdfinfo (from poppler-utils)
     try:
         result = subprocess.run(['pdfinfo', pdf_path],
                                 capture_output=True, text=True, timeout=10)
@@ -181,7 +210,7 @@ def get_pdf_page_count(pdf_path):
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
 
-    # Method 2: Try PyPDF2 (if available)
+    # Method 4: Try PyPDF2 (if available)
     try:
         import PyPDF2
         with open(pdf_path, 'rb') as f:
@@ -190,7 +219,7 @@ def get_pdf_page_count(pdf_path):
     except (ImportError, Exception):
         pass
 
-    # Method 3: Try pikepdf (if available)
+    # Method 5: Try pikepdf (if available)
     try:
         import pikepdf
         with pikepdf.open(pdf_path) as pdf:
@@ -198,7 +227,7 @@ def get_pdf_page_count(pdf_path):
     except (ImportError, Exception):
         pass
 
-    # Method 4: Try Calibre's PDF reader
+    # Method 6: Try Calibre's PDF reader
     try:
         from calibre.ebooks.pdf.render.from_html import PDFStream
         from io import BytesIO
@@ -211,7 +240,8 @@ def get_pdf_page_count(pdf_path):
     except Exception:
         pass
 
-    # Method 5: Count PDF page objects directly
+    # Method 7: Count PDF page objects directly (last resort: this overcounts
+    # when the PDF contains page objects no longer in the page tree)
     try:
         with open(pdf_path, 'rb') as f:
             content = f.read()
@@ -223,7 +253,7 @@ def get_pdf_page_count(pdf_path):
     except Exception:
         pass
 
-    # Method 6: Use qpdf if available
+    # Method 8: Use qpdf if available
     try:
         result = subprocess.run(['qpdf', '--show-npages', pdf_path],
                                 capture_output=True, text=True, timeout=10)

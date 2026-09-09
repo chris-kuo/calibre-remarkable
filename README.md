@@ -46,6 +46,9 @@ That means you need to:
 
 The plugin uses multiple fallback methods for PDF page detection. Install any of these for better reliability:
 
+Page counts are read from the PDF's page tree by Calibre's bundled podofo, so
+these are only fallbacks for the unlikely case that fails:
+
 - `poppler-utils` (provides `pdfinfo`) - recommended
 - `PyPDF2` Python library
 - `pikepdf` Python library
