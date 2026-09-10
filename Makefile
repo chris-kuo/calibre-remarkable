@@ -20,6 +20,7 @@ dist: clean
 		main.py \
 		worker.py \
 		remarkable.py \
+		rtl.py \
 		config.py \
 		plugin-import-name-remarkable_sync.txt \
 		images/

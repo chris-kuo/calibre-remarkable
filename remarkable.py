@@ -167,10 +167,39 @@ def get_all_folders():
 
 
 def get_pdf_page_count(pdf_path):
-    """Get the number of pages in a PDF file"""
+    """
+    Get the number of pages in a PDF file.
+
+    The first two methods read the PDF's page tree and are exact; everything
+    after them is a fallback that can be wrong. That matters: the count decides
+    lastOpenedPage for right-to-left books, and an out-of-range value is thrown
+    away by the reMarkable app, which then opens the book on page 1.
+    """
     import subprocess
 
-    # Method 1: Try pdfinfo (from poppler-utils)
+    # Method 1: calibre's own podofo. Always present inside calibre, and
+    # authoritative - it counts the page tree.
+    try:
+        from calibre.utils.podofo import get_podofo
+        doc = get_podofo().PDFDoc()
+        doc.open(pdf_path)
+        count = doc.page_count()
+        if count and count > 0:
+            return count
+    except Exception:
+        pass
+
+    # Method 2: read /Count off the page tree root ourselves. Pure Python, no
+    # dependencies, and correct even for a PDF carrying orphaned page objects.
+    try:
+        from calibre_plugins.remarkable_sync.rtl import count_pages
+        count = count_pages(pdf_path)
+        if count:
+            return count
+    except Exception:
+        pass
+
+    # Method 3: Try pdfinfo (from poppler-utils)
     try:
         result = subprocess.run(['pdfinfo', pdf_path],
                                 capture_output=True, text=True, timeout=10)
@@ -181,7 +210,7 @@ def get_pdf_page_count(pdf_path):
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
 
-    # Method 2: Try PyPDF2 (if available)
+    # Method 4: Try PyPDF2 (if available)
     try:
         import PyPDF2
         with open(pdf_path, 'rb') as f:
@@ -190,7 +219,7 @@ def get_pdf_page_count(pdf_path):
     except (ImportError, Exception):
         pass
 
-    # Method 3: Try pikepdf (if available)
+    # Method 5: Try pikepdf (if available)
     try:
         import pikepdf
         with pikepdf.open(pdf_path) as pdf:
@@ -198,7 +227,7 @@ def get_pdf_page_count(pdf_path):
     except (ImportError, Exception):
         pass
 
-    # Method 4: Try Calibre's PDF reader
+    # Method 6: Try Calibre's PDF reader
     try:
         from calibre.ebooks.pdf.render.from_html import PDFStream
         from io import BytesIO
@@ -211,7 +240,8 @@ def get_pdf_page_count(pdf_path):
     except Exception:
         pass
 
-    # Method 5: Count PDF page objects directly
+    # Method 7: Count PDF page objects directly (last resort: this overcounts
+    # when the PDF contains page objects no longer in the page tree)
     try:
         with open(pdf_path, 'rb') as f:
             content = f.read()
@@ -223,7 +253,7 @@ def get_pdf_page_count(pdf_path):
     except Exception:
         pass
 
-    # Method 6: Use qpdf if available
+    # Method 8: Use qpdf if available
     try:
         result = subprocess.run(['qpdf', '--show-npages', pdf_path],
                                 capture_output=True, text=True, timeout=10)
@@ -280,7 +310,7 @@ def find_existing_document(title, folder_uuid=''):
     return None
 
 
-def update_existing_document(pdf_path, doc_uuid):
+def update_existing_document(pdf_path, doc_uuid, open_at_end=False):
     """
     Update an existing document's PDF file only.
     Preserves metadata, annotations, and reading position.
@@ -288,6 +318,9 @@ def update_existing_document(pdf_path, doc_uuid):
     Args:
         pdf_path: Path to new PDF file
         doc_uuid: UUID of existing document
+        open_at_end: True for a right-to-left book, which opens on its last
+            page. An already-read document keeps the position it is on; only an
+            unread one is moved to the end.
 
     Returns:
         tuple: (success, message)
@@ -336,6 +369,10 @@ def update_existing_document(pdf_path, doc_uuid):
                 metadata = json.load(f)
 
             metadata['lastModified'] = str(int(time.time() * 1000))
+            if open_at_end and not metadata.get('lastOpenedPage'):
+                # Unread so far: start at the far end, which is where a
+                # right-to-left book begins.
+                metadata['lastOpenedPage'] = max(0, new_page_count - 1)
 
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=4)
@@ -352,9 +389,18 @@ def update_existing_document(pdf_path, doc_uuid):
         return (False, f"Error updating document: {str(e)}")
 
 
-def send_to_remarkable(pdf_path, title, folder_uuid='', author=None):
+def send_to_remarkable(pdf_path, title, folder_uuid='', author=None, open_at_end=False):
     """
     Send PDF to reMarkable desktop app
+
+    Args:
+        pdf_path: Path to the PDF to send
+        title: Document title
+        folder_uuid: Target folder UUID ('' for the root)
+        author: Author name for the document metadata
+        open_at_end: True for a right-to-left book. Its pages are reversed, so
+            it opens on the last page; the cover image sits at both ends of the
+            PDF, so page 1 still thumbnails correctly.
 
     Returns:
         tuple: (success, uuid, message)
@@ -376,6 +422,11 @@ def send_to_remarkable(pdf_path, title, folder_uuid='', author=None):
     doc_uuid = str(uuid_module.uuid4())
     page_uuids = [str(uuid_module.uuid4()) for _ in range(page_count)]
     
+    # A right-to-left book runs back to front, so it opens on the final page of
+    # the file rather than the first. The library cover stays page 1: for an RTL
+    # book the plugin puts a copy of the cover image at both ends of the PDF.
+    start_page = max(0, page_count - 1) if open_at_end else 0
+
     try:
         # 1. Copy PDF
         shutil.copy(pdf_path, rm_path / f"{doc_uuid}.pdf")
@@ -386,7 +437,7 @@ def send_to_remarkable(pdf_path, title, folder_uuid='', author=None):
             "createdTime": timestamp_ms,
             "lastModified": timestamp_ms,
             "lastOpened": timestamp_ms,
-            "lastOpenedPage": 0,
+            "lastOpenedPage": start_page,
             "new": True,
             "parent": folder_uuid,
             "pinned": False,

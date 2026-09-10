@@ -23,7 +23,7 @@ class SendWorkerThread(QThread):
 
     def __init__(self, books, folder_uuid, device_type, font_family, font_size,
                  line_height, margin_left, margin_right, margin_top, margin_bottom,
-                 footer_template, auto_convert):
+                 footer_template, auto_convert, page_direction='auto'):
         QThread.__init__(self)
         self.books = books
         self.folder_uuid = folder_uuid
@@ -37,6 +37,7 @@ class SendWorkerThread(QThread):
         self.margin_bottom = margin_bottom
         self.footer_template = footer_template
         self.auto_convert = auto_convert
+        self.page_direction = page_direction
 
         self._cancelled = False
         self._existing_reply = None  # Set by main thread via slot
@@ -94,7 +95,7 @@ class SendWorkerThread(QThread):
                 book, self.folder_uuid, self.device_type, self.font_family,
                 self.font_size, self.line_height,
                 self.margin_left, self.margin_right, self.margin_top, self.margin_bottom,
-                self.footer_template, self.auto_convert,
+                self.footer_template, self.auto_convert, self.page_direction,
                 update_existing=update_existing, existing_uuid=existing_uuid
             )
 
@@ -115,7 +116,7 @@ class ExportWorkerThread(QThread):
 
     def __init__(self, books, output_dir, device_type, font_family, font_size,
                  line_height, margin_left, margin_right, margin_top, margin_bottom,
-                 footer_template, auto_convert):
+                 footer_template, auto_convert, page_direction='auto'):
         QThread.__init__(self)
         self.books = books
         self.output_dir = output_dir
@@ -129,6 +130,7 @@ class ExportWorkerThread(QThread):
         self.margin_bottom = margin_bottom
         self.footer_template = footer_template
         self.auto_convert = auto_convert
+        self.page_direction = page_direction
         self._cancelled = False
 
     def cancel(self):
@@ -148,7 +150,7 @@ class ExportWorkerThread(QThread):
                 book, self.output_dir, self.device_type, self.font_family,
                 self.font_size, self.line_height,
                 self.margin_left, self.margin_right, self.margin_top, self.margin_bottom,
-                self.footer_template, self.auto_convert,
+                self.footer_template, self.auto_convert, self.page_direction,
             )
             self.book_finished.emit(success, message, output_path or '')
 
@@ -255,6 +257,7 @@ class ReMarkableSyncAction(InterfaceAction):
         margin_bottom = prefs.get('pdf_margin_bottom', 35)
         footer_template = prefs.get('pdf_footer_template', '')
         auto_convert = prefs.get('auto_convert_epub', True)
+        page_direction = prefs.get('pdf_page_direction', 'auto')
 
         # Track results
         self._success_count = 0
@@ -280,7 +283,7 @@ class ReMarkableSyncAction(InterfaceAction):
         self._worker = SendWorkerThread(
             books, folder_uuid, device_type, font_family, font_size, line_height,
             margin_left, margin_right, margin_top, margin_bottom,
-            footer_template, auto_convert
+            footer_template, auto_convert, page_direction
         )
         self._worker.progress_update.connect(self._on_progress_update)
         self._worker.book_finished.connect(self._on_book_finished)
@@ -533,6 +536,7 @@ class ReMarkableSyncAction(InterfaceAction):
         margin_bottom = prefs.get('pdf_margin_bottom', 35)
         footer_template = prefs.get('pdf_footer_template', '')
         auto_convert = prefs.get('auto_convert_epub', True)
+        page_direction = prefs.get('pdf_page_direction', 'auto')
 
         self._export_success = 0
         self._export_errors = 0
@@ -552,7 +556,7 @@ class ReMarkableSyncAction(InterfaceAction):
         self._export_worker = ExportWorkerThread(
             books, output_dir, device_type, font_family, font_size, line_height,
             margin_left, margin_right, margin_top, margin_bottom,
-            footer_template, auto_convert,
+            footer_template, auto_convert, page_direction,
         )
         self._export_worker.progress_update.connect(self._on_export_progress)
         self._export_worker.book_finished.connect(self._on_export_book_finished)
