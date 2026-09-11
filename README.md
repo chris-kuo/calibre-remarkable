@@ -56,7 +56,7 @@ these are only fallbacks for the unlikely case that fails:
 
 ## Installation
 
-1. Go to the [latest release](https://github.com/mremond/calibre-remarkable/releases/latest)
+1. Go to the [latest release](https://github.com/chris-kuo/calibre-remarkable/releases/latest)
    and download the `remarkable_sync-X.Y.Z.zip` asset under **Assets**.
 
    > ⚠️ Do **not** download "Source code (zip)" or
